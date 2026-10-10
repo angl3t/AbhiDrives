@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>2D Highway Racer</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background: #11141a;
+      color: #fff;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    #hud {
+      display: flex;
+      justify-content: space-between;
+      width: 420px;
+      margin-bottom: 12px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 1px;
+    }
+    #gameWrapper {
+      position: relative;
+    }
+    canvas {
+      background: #2b2e38;
+      border: 4px solid #f39c12;
+      border-radius: 10px;
+      box-shadow: 0 0 25px rgba(243, 156, 18, 0.35);
+      display: block;
+    }
+    .hint {
+      margin-top: 12px;
+      font-size: 13px;
+      color: #9aa4b2;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="hud">
+    <div id="scoreLabel">Distance: 0m</div>
+    <div id="speedLabel">Speed: 0 km/h</div>
+  </div>
+
+  <div id="gameWrapper">
+    <canvas id="gameCanvas" width="420" height="650"></canvas>
+  </div>
+
+  <div class="hint">
+    Use <strong>W/S</strong> (or <strong>Up/Down</strong>) to accelerate/brake &bull; 
+    <strong>A/D</strong> (or <strong>Left/Right</strong>) to steer &bull; 
+    Press <strong>R</strong> to restart.
+  </div>
+
+  <script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const scoreLabel = document.getElementById("scoreLabel");
+    const speedLabel = document.getElementById("speedLabel");
+
+    // Road setup
+    const roadWidth = 340;
+    const roadLeft = (canvas.width - roadWidth) / 2;
+    const lanes = 3;
+    const laneWidth = roadWidth / lanes;
+    let roadOffsetY = 0;
+
+    // Game state
+    let distance = 0;
+    let gameOver = false;
+    let spawnTimer = 0;
+
+    // Keyboard inputs
+    const keys = { up: false, down: false, left: false, right: false };
+
+    // Player car
+    const player = {
+      x: roadLeft + laneWidth * 1.5 - 20,
+      y: canvas.height - 130,
+      width: 40,
+      height: 75,
+      speed: 0,
+      maxSpeed: 14,
+      accel: 0.25,
+      friction: 0.1,
+      turnSpeed: 5,
+      color: "#e74c3c"
+    };
+
+    // AI Traffic
+    const traffic = [];
+    const trafficColors = ["#3498db", "#2ecc71", "#f1c40f", "#9b59b6", "#e67e22"];
+
+    window.addEventListener("keydown", (e) => {
+      const k = e.key.toLowerCase();
+      if (k === "arrowup" || k === "w") keys.up = true;
+      if (k === "arrowdown" || k === "s") keys.down = true;
+      if (k === "arrowleft" || k === "a") keys.left = true;
+      if (k === "arrowright" || k === "d") keys.right = true;
+      if (k === "r" && gameOver) resetGame();
+    });
+
+    window.addEventListener("keyup", (e) => {
+      const k = e.key.toLowerCase();
+      if (k === "arrowup" || k === "w") keys.up = false;
+      if (k === "arrowdown" || k === "s") keys.down = false;
+      if (k === "arrowleft" || k === "a") keys.left = false;
+      if (k === "arrowright" || k === "d") keys.right = false;
+    });
+
+    function spawnCar() {
+      const laneIndex = Math.floor(Math.random() * lanes);
+      const laneCenter = roadLeft + laneIndex * laneWidth + laneWidth / 2;
+      const x = laneCenter - 20;
+
+      // Don't spawn if another car is right near the top of the lane
+      const isBlocked = traffic.some(c => Math.abs(c.x - x) < 10 && c.y < 120);
+      if (isBlocked) return;
+
+      traffic.push({
+        x: x,
+        y: -100,
+        width: 40,
+        height: 75,
+        speed: Math.random() * 2 + 3.5, // Constant forward speed
+        color: trafficColors[Math.floor(Math.random() * trafficColors.length)]
+      });
+    }
+
+    function checkCollision(r1, r2) {
+      const margin = 4; // slight forgiving padding for hitboxes
+      return (
+        r1.x + margin < r2.x + r2.width - margin &&
+        r1.x + r1.width - margin > r2.x + margin &&
+        r1.y + margin < r2.y + r2.height - margin &&
+        r1.y + r1.height - margin > r2.y + margin
+      );
+    }
+
+    function drawCar(car, isPlayer = false) {
+      ctx.save();
+      ctx.translate(car.x, car.y);
+
+      // Car shadow
+      ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+      ctx.fillRect(4, 4, car.width, car.height);
+
+      // Wheels
+      ctx.fillStyle = "#111";
+      ctx.fillRect(-3, 10, 4, 16);
+      ctx.fillRect(car.width - 1, 10, 4, 16);
+      ctx.fillRect(-3, car.height - 24, 4, 16);
+      ctx.fillRect(car.width - 1, car.height - 24, 4, 16);
+
+      // Body chassis
+      ctx.fillStyle = car.color;
+      ctx.beginPath();
+      ctx.roundRect(0, 0, car.width, car.height, 8);
+      ctx.fill();
+
+      // Windshield & rear glass
+      ctx.fillStyle = "#1e272e";
+      ctx.fillRect(5, 18, car.width - 10, 14); // Front
+      ctx.fillRect(6, car.height - 22, car.width - 12, 10); // Rear
+
+      // Roof
+      ctx.fillStyle = car.color;
+      ctx.fillRect(8, 28, car.width - 16, 22);
+
+      // Lights
+      if (isPlayer) {
+        // Headlights
+        ctx.fillStyle = "#fffa65";
+        ctx.fillRect(4, 2, 8, 4);
+        ctx.fillRect(car.width - 12, 2, 8, 4);
+        // Taillights
+        ctx.fillStyle = keys.down ? "#ff1e00" : "#c0392b";
+        ctx.fillRect(4, car.height - 4, 8, 3);
+        ctx.fillRect(car.width - 12, car.height - 4, 8, 3);
+      } else {
+        // Red taillights for AI traffic
+        ctx.fillStyle = "#ff3838";
+        ctx.fillRect(4, car.height - 4, 8, 3);
+        ctx.fillRect(car.width - 12, car.height - 4, 8, 3);
+      }
+
+      ctx.restore();
+    }
+
+    function drawRoad() {
+      // Grass / Shoulders
+      ctx.fillStyle = "#27ae60";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Asphalt
+      ctx.fillStyle = "#2f3542";
+      ctx.fillRect(roadLeft, 0, roadWidth, canvas.height);
+
+      // Curbs / Barriers
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(roadLeft - 6, 0, 6, canvas.height);
+      ctx.fillRect(roadLeft + roadWidth, 0, 6, canvas.height);
+
+      // Dashed lane lines
+      ctx.strokeStyle = "#dfe4ea";
+      ctx.lineWidth = 4;
+      ctx.setLineDash([26, 20]);
+      ctx.lineDashOffset = -roadOffsetY;
+
+      for (let i = 1; i < lanes; i++) {
+        const x = roadLeft + i * laneWidth;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+
+    function update() {
+      if (gameOver) return;
+
+      // Acceleration & Braking
+      if (keys.up) {
+        player.speed = Math.min(player.speed + player.accel, player.maxSpeed);
+      } else if (keys.down) {
+        player.speed = Math.max(player.speed - player.accel * 1.5, 0);
+      } else {
+        player.speed = Math.max(player.speed - player.friction, 0);
+      }
+
+      // Steering (only steer when car is moving)
+      if (player.speed > 0.5) {
+        if (keys.left) player.x -= player.turnSpeed;
+        if (keys.right) player.x += player.turnSpeed;
+      }
+
+      // Keep player inside road borders
+      if (player.x < roadLeft) player.x = roadLeft;
+      if (player.x + player.width > roadLeft + roadWidth) {
+        player.x = roadLeft + roadWidth - player.width;
+      }
+
+      // Move road markings relative to player speed
+      roadOffsetY = (roadOffsetY + player.speed * 2) % 46;
+
+      // Update distance & UI
+      distance += Math.floor(player.speed * 0.4);
+      scoreLabel.innerText = "Distance: " + distance + "m";
+      speedLabel.innerText = "Speed: " + Math.round(player.speed * 12) + " km/h";
+
+      // Spawn traffic cars
+      spawnTimer++;
+      if (spawnTimer > Math.max(50, 100 - player.speed * 3)) {
+        spawnCar();
+        spawnTimer = 0;
+      }
+
+      // Update AI traffic positions (relative speed)
+      for (let i = traffic.length - 1; i >= 0; i--) {
+        const car = traffic[i];
+        // Relative vertical movement: player speed minus AI speed
+        car.y += (player.speed - car.speed) * 1.5;
+
+        // Check for collision
+        if (checkCollision(player, car)) {
+          gameOver = true;
+        }
+
+        // Remove off-screen traffic
+        if (car.y > canvas.height + 100 || car.y < -250) {
+          traffic.splice(i, 1);
+        }
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      drawRoad();
+
+      // Render AI cars
+      for (const car of traffic) {
+        drawCar(car, false);
+      }
+
+      // Render player car
+      drawCar(player, true);
+
+      // Game Over Screen
+      if (gameOver) {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.78)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = "#e74c3c";
+        ctx.font = "bold 34px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("CRASHED!", canvas.width / 2, canvas.height / 2 - 30);
+
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "20px sans-serif";
+        ctx.fillText("Total Distance: " + distance + "m", canvas.width / 2, canvas.height / 2 + 15);
+
+        ctx.fillStyle = "#f1c40f";
+        ctx.font = "16px sans-serif";
+        ctx.fillText("Press R to Drive Again", canvas.width / 2, canvas.height / 2 + 60);
+      }
+    }
+
+    function resetGame() {
+      distance = 0;
+      player.speed = 0;
+      player.x = roadLeft + laneWidth * 1.5 - 20;
+      traffic.length = 0;
+      gameOver = false;
+      requestAnimationFrame(gameLoop);
+    }
+
+    function gameLoop() {
+      update();
+      draw();
+      if (!gameOver) requestAnimationFrame(gameLoop);
+    }
+
+    // Start engine
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
